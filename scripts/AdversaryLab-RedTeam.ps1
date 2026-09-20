@@ -35,6 +35,11 @@
     components already present, and on Remove also remove components that
     pre-dated this script.
 
+.PARAMETER IncludeRetired
+    Also install the retired modules (AzureADPreview, MSOnline). Azure AD Graph
+    is decommissioned, so most of their cmdlets fail at runtime - they are
+    excluded by default rather than costing install time for nothing.
+
 .PARAMETER RemoveChocolatey
     On Remove, also remove Chocolatey itself, not just the packages.
 
@@ -78,6 +83,7 @@ param(
 
     [switch]$Force,
     [switch]$Yes,
+    [switch]$IncludeRetired,
     [switch]$RemoveChocolatey,
 
     [ValidateNotNullOrEmpty()]
@@ -99,8 +105,16 @@ $ProgressPreference    = 'SilentlyContinue'
 # Data - single source of truth for all three verbs
 # ============================================================================
 
-# Retired modules are installed for completeness but flagged: Azure AD Graph is
-# decommissioned, so most MSOnline / AzureADPreview cmdlets now fail at runtime.
+# 'Az' and 'Microsoft.Graph' are meta-modules: manifests whose only content is a
+# dependency list, 102 and 39 modules respectively. They are kept because
+# MicroBurst gates its entire Az function set on 'Get-InstalledModule -Name Az',
+# which matches only the meta-module itself - installing the sub-modules alone
+# would silently disable half of it. Install-PSResource is what makes the cost
+# of keeping them acceptable.
+#
+# Retired modules are opt-in (-IncludeRetired): Azure AD Graph is decommissioned,
+# so most MSOnline / AzureADPreview cmdlets fail at runtime. Installing them by
+# default spent minutes on tooling that is already broken.
 $PSModules = [ordered]@{
     'AADInternals'     = @{ Retired = $false }
     'Az'               = @{ Retired = $false; Prefix = 'Az*' }
@@ -373,8 +387,100 @@ function Remove-DefenderExclusionComponent {
 }
 
 # ============================================================================
+# Gallery installer
+# ============================================================================
+
+$script:GalleryInstaller = $null
+
+function Initialize-GalleryInstaller {
+    <#
+        PowerShellGet v2's Install-Module resolves dependencies serially through
+        PackageManagement, so a default run is ~141 sequential module installs
+        (Az pulls 102, Microsoft.Graph 39) behind a progress bar that
+        $ProgressPreference cannot suppress - PackageManagement writes it from a
+        child runspace that never sees this scope's preference.
+
+        PSResourceGet's Install-PSResource does the same work substantially
+        faster and quietly, so prefer it and bootstrap it when it is missing.
+        Falls back to Install-Module if the bootstrap fails, since a slow
+        install is better than no install.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Internal helper. Mutations are gated by Invoke-ComponentAction.')]
+    param()
+
+    if ($script:GalleryInstaller) { return $script:GalleryInstaller }
+
+    if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
+        Write-Status 'Installing NuGet provider...'
+        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
+    }
+
+    if (-not (Test-CommandExists 'Install-PSResource')) {
+        Write-Status 'Installing PSResourceGet (much faster module installs)...'
+        try {
+            Install-Module -Name Microsoft.PowerShell.PSResourceGet -Force -AllowClobber `
+                           -Scope AllUsers -ErrorAction Stop
+            Import-Module Microsoft.PowerShell.PSResourceGet -ErrorAction Stop
+        }
+        catch {
+            Write-Status "PSResourceGet unavailable ($($_.Exception.Message)); using Install-Module" -Type Warning
+        }
+    }
+
+    if (Test-CommandExists 'Install-PSResource') {
+        try { Set-PSResourceRepository -Name PSGallery -Trusted -ErrorAction Stop }
+        catch { Write-Verbose "Could not mark PSGallery trusted: $($_.Exception.Message)" }
+        $script:GalleryInstaller = 'PSResource'
+    }
+    else {
+        if ((Get-PSRepository -Name PSGallery).InstallationPolicy -ne 'Trusted') {
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+        }
+        $script:GalleryInstaller = 'PowerShellGet'
+    }
+
+    Write-Status "Module installer: $script:GalleryInstaller" -Type Info
+    return $script:GalleryInstaller
+}
+
+function Install-GalleryModule {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Internal helper. Mutations are gated by Invoke-ComponentAction.')]
+    param([string]$Name)
+
+    if ((Initialize-GalleryInstaller) -eq 'PSResource') {
+        Install-PSResource -Name $Name -Scope AllUsers -TrustRepository -Reinstall:$Force -ErrorAction Stop
+    }
+    else {
+        Install-Module -Name $Name -Force -AllowClobber -Scope AllUsers -ErrorAction Stop
+    }
+}
+
+function Uninstall-GalleryModule {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Internal helper. Mutations are gated by Invoke-ComponentAction.')]
+    param([string]$Name)
+
+    # Whichever installer was used, the folder sweep in Remove-PSModulesComponent
+    # is the backstop - PSResourceGet and PowerShellGet do not read each other's
+    # install metadata, so the matching uninstall cmdlet may not find the module.
+    if (Test-CommandExists 'Uninstall-PSResource') {
+        Uninstall-PSResource -Name $Name -SkipDependencyCheck -ErrorAction Stop
+    }
+    else {
+        Uninstall-Module -Name $Name -AllVersions -Force -ErrorAction Stop
+    }
+}
+
+# ============================================================================
 # Component: PSModules
 # ============================================================================
+
+function Get-SelectedPSModules {
+    # Retired modules are opt-in; see the note on $PSModules.
+    return @($PSModules.Keys | Where-Object { $IncludeRetired -or -not $PSModules[$_].Retired })
+}
 
 function Get-ModuleFamily {
     param([string]$Name)
@@ -385,27 +491,27 @@ function Get-ModuleFamily {
 }
 
 function Test-PSModulesComponent {
+    $selected = @(Get-SelectedPSModules)
     $found = @(); $missing = @()
-    foreach ($name in $PSModules.Keys) {
+    foreach ($name in $selected) {
         if (@(Get-ModuleFamily -Name $name).Count -gt 0) { $found += $name } else { $missing += $name }
     }
     return [pscustomobject]@{
         Present = $missing.Count -eq 0
-        Detail  = "$($found.Count)/$($PSModules.Count) present" + $(if ($missing) { "; missing: $($missing -join ', ')" } else { '' })
+        Detail  = "$($found.Count)/$($selected.Count) present" + $(if ($missing) { "; missing: $($missing -join ', ')" } else { '' })
     }
 }
 
 function Install-PSModulesComponent {
-    if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
-        Write-Status 'Installing NuGet provider...'
-        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
-    }
-    if ((Get-PSRepository -Name PSGallery).InstallationPolicy -ne 'Trusted') {
-        Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+    $null = Initialize-GalleryInstaller
+
+    $skipped = @($PSModules.Keys | Where-Object { $_ -notin (Get-SelectedPSModules) })
+    if ($skipped) {
+        Write-Status "Skipping retired module(s): $($skipped -join ', ') (use -IncludeRetired)" -Type Info
     }
 
     $installed = @()
-    foreach ($name in $PSModules.Keys) {
+    foreach ($name in (Get-SelectedPSModules)) {
         $spec = $PSModules[$name]
         $existing = Get-Module -ListAvailable -Name $name -ErrorAction SilentlyContinue | Select-Object -First 1
 
@@ -415,7 +521,8 @@ function Install-PSModulesComponent {
         }
 
         try {
-            Install-Module -Name $name -Force -AllowClobber -Scope AllUsers -ErrorAction Stop
+            Write-Status "Installing $name..."
+            Install-GalleryModule -Name $name
             $verify = Get-Module -ListAvailable -Name $name -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($verify) {
                 Write-Status "$name installed (v$($verify.Version))" -Type Success
@@ -459,7 +566,7 @@ function Remove-PSModulesComponent {
 
         $removed = 0
         foreach ($mod in $family) {
-            try { Uninstall-Module -Name $mod -AllVersions -Force -ErrorAction Stop; $removed++ }
+            try { Uninstall-GalleryModule -Name $mod; $removed++ }
             catch { Write-Verbose "Uninstall-Module failed for $mod; folder cleanup below will handle it" }
         }
 
@@ -793,6 +900,9 @@ function Test-AzureHoundComponent {
 function Install-AzureHoundComponent {
     if ((Test-AzureHoundComponent).Present -and -not $Force) {
         Write-Status 'AzureHound already installed' -Type Success
+        # Record that it pre-dated us. Every other component does this, and
+        # without it Remove deleted a directory this script never created.
+        Set-ComponentState -Name 'AzureHound' -Data @{ PreExisting = $true }
         return
     }
 
@@ -839,6 +949,7 @@ function Install-AzureHoundComponent {
 
     Set-ComponentState -Name 'AzureHound' -Data @{
         InstalledAt = (Get-Date).ToString('o')
+        PreExisting = $false
         Version     = $release.tag_name
         PathEntry   = if ($added) { $exe.DirectoryName } else { $null }
     }
@@ -851,20 +962,31 @@ function Remove-AzureHoundComponent {
 
     $state = Get-ComponentState -Name 'AzureHound'
 
+    if (-not (Test-Path $AzureHoundDir)) {
+        Write-Status 'AzureHound not installed' -Type Info
+        Remove-ComponentState -Name 'AzureHound'
+        return
+    }
+
+    # Leave alone anything this script did not install: either Install recorded
+    # it as pre-existing, or there is no manifest entry at all (installed by
+    # hand, or by a build that pre-dated state tracking). This is what every
+    # other component does; AzureHound used to delete the directory regardless.
+    $preExisting = (-not $state) -or
+                   ($state.PSObject.Properties['PreExisting'] -and $state.PreExisting)
+    if ($preExisting -and -not $Force) {
+        Write-Status 'AzureHound pre-dated this script; leaving it (use -Force to remove)' -Type Warning
+        return
+    }
+
     if ($state -and $state.PSObject.Properties['PathEntry'] -and $state.PathEntry) {
         if (Remove-MachinePath -Directory $state.PathEntry) {
             Write-Status "Removed $($state.PathEntry) from the machine PATH" -Type Success
         }
     }
 
-    if (Test-Path $AzureHoundDir) {
-        Remove-Item -Path $AzureHoundDir -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Status 'AzureHound removed' -Type Success
-    }
-    else {
-        Write-Status 'AzureHound not installed' -Type Info
-    }
-
+    Remove-Item -Path $AzureHoundDir -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Status 'AzureHound removed' -Type Success
     Remove-ComponentState -Name 'AzureHound'
 }
 
@@ -1117,6 +1239,13 @@ function Remove-ShortcutsComponent {
 # Component table - each component declares its three verbs exactly once.
 # Install walks this table in order; Remove walks it in reverse, so the
 # Defender exclusion is added first and removed last.
+#
+# Requires declares what a component needs in order to do anything, so Test and
+# -WhatIf can say 'blocked' rather than just 'absent'. It probes the capability
+# (is git on PATH?) rather than the providing component's completeness, because
+# git or Python installed by some other means is perfectly valid and must not be
+# reported as blocked. From names the component that would supply it. These are
+# reporting only: the checks inside each Install remain the real gate.
 # ============================================================================
 
 $Components = [ordered]@{
@@ -1127,10 +1256,13 @@ $Components = [ordered]@{
     Chocolatey        = @{ Description = 'Chocolatey package manager'
                            Test = { Test-ChocolateyComponent };        Install = { Install-ChocolateyComponent };        Remove = { Remove-ChocolateyComponent } }
     ChocoPackages     = @{ Description = 'Chocolatey packages (git, python3, vscode, azure-cli, ...)'
+                           Requires = @( @{ Test = { Test-CommandExists 'choco' };   Name = 'choco'; From = 'Chocolatey' } )
                            Test = { Test-ChocoPackagesComponent };     Install = { Install-ChocoPackagesComponent };     Remove = { Remove-ChocoPackagesComponent } }
     PythonPackages    = @{ Description = 'Python tools (roadrecon, scoutsuite)'
+                           Requires = @( @{ Test = { [bool](Get-PipCommand) };       Name = 'pip';   From = 'ChocoPackages' } )
                            Test = { Test-PythonPackagesComponent };    Install = { Install-PythonPackagesComponent };    Remove = { Remove-PythonPackagesComponent } }
     GitHubRepos       = @{ Description = 'GitHub tooling repositories'
+                           Requires = @( @{ Test = { Test-CommandExists 'git' };     Name = 'git';   From = 'ChocoPackages' } )
                            Test = { Test-GitHubReposComponent };       Install = { Install-GitHubReposComponent };       Remove = { Remove-GitHubReposComponent } }
     AzureHound        = @{ Description = 'AzureHound collector binary'
                            Test = { Test-AzureHoundComponent };        Install = { Install-AzureHoundComponent };        Remove = { Remove-AzureHoundComponent } }
@@ -1151,6 +1283,21 @@ function Get-SelectedComponents {
     return $names
 }
 
+function Get-UnmetRequirements {
+    param([string]$Name)
+
+    $spec = $Components[$Name]
+    if (-not $spec.ContainsKey('Requires')) { return @() }
+
+    $unmet = @()
+    foreach ($req in $spec.Requires) {
+        $met = $false
+        try { $met = [bool](& $req.Test) } catch { $met = $false }
+        if (-not $met) { $unmet += "$($req.Name) (from $($req.From))" }
+    }
+    return $unmet
+}
+
 function Get-ComponentReport {
     param([string[]]$Names)
 
@@ -1160,10 +1307,15 @@ function Get-ComponentReport {
         try { $result = & $spec.Test }
         catch { $result = [pscustomobject]@{ Present = $false; Detail = "test failed: $($_.Exception.Message)" } }
 
+        # Only worth probing when something is missing; a component that is
+        # already present has satisfied its requirements by definition.
+        $unmet = @(if ($result.Present) { @() } else { Get-UnmetRequirements -Name $name })
+
         $report += [pscustomobject]@{
             Component = $name
             Present   = $result.Present
             Detail    = $result.Detail
+            Unmet     = $unmet
         }
     }
     return $report
@@ -1176,7 +1328,11 @@ function Show-Plan {
     foreach ($row in (Get-ComponentReport -Names $Names)) {
         $state = if ($row.Present) { 'present' } else { 'absent' }
         $verb  = switch ($Action) {
-            'Install' { if ($row.Present -and -not $Force) { 'skip (already present)' } else { 'install' } }
+            'Install' {
+                if ($row.Present -and -not $Force) { 'skip (already present)' }
+                elseif ($row.Unmet)                { "skip (needs $($row.Unmet -join ', '))" }
+                else                               { 'install' }
+            }
             'Remove'  { if ($row.Present) { 'remove' } else { 'skip (absent)' } }
         }
         Write-Status "$($row.Component): currently $state -> would $verb" -Type Plan
@@ -1211,6 +1367,7 @@ function Show-TestReport {
         if ($row.Present) { Write-Status "$($row.Component): present" -Type Success }
         else              { Write-Status "$($row.Component): not installed" -Type Error }
         Write-Host "         $($row.Detail)" -ForegroundColor DarkGray
+        if ($row.Unmet) { Write-Host "         blocked by missing: $($row.Unmet -join ', ')" -ForegroundColor DarkGray }
     }
 
     $missing = @($report | Where-Object { -not $_.Present })

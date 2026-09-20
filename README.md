@@ -268,7 +268,18 @@ when anything is unhealthy, so it can gate automation.
 
 # What is currently installed?
 .\scripts\AdversaryLab-RedTeam.ps1 -Action Test
+
+# Also install the retired modules (AzureADPreview, MSOnline)
+.\scripts\AdversaryLab-RedTeam.ps1 -Component PSModules -IncludeRetired
 ```
+
+> [!NOTE]
+> Module installs go through `Install-PSResource` (PSResourceGet), which the
+> script bootstraps if it is missing. `Az` alone pulls 102 dependent modules and
+> `Microsoft.Graph` another 39; PowerShellGet's `Install-Module` walks those
+> serially, which is what made a first run take so long. `AzureADPreview` and
+> `MSOnline` are skipped unless you pass `-IncludeRetired` - Azure AD Graph is
+> decommissioned, so most of their cmdlets fail at runtime anyway.
 
 > [!WARNING]
 > This adds a Windows Defender exclusion for `C:\AzureRedTeamTools` and installs
