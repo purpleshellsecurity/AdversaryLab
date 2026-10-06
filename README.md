@@ -1,495 +1,469 @@
-# Adversary Lab - Azure Security Monitoring Environment
+# Adversary Lab - Azure Detection Engineering Environment
 
-A comprehensive Azure-based cybersecurity lab environment designed for security professionals to practice threat detection, incident response, adversary emulation, and security monitoring using Microsoft Sentinel and Azure security services.
+AdversaryLab is a dual-endpoint Azure security lab for practicing detection engineering, threat hunting, adversary emulation, and security monitoring with Microsoft Sentinel and Log Analytics.
+
+The lab deploys both a Windows 11 endpoint and an Ubuntu 24.04 LTS endpoint, connects each to Azure Monitor Agent (AMA), and sends Windows event telemetry and Linux syslog into a shared Log Analytics workspace.
 
 ## Overview
 
-The Adversary Lab provides a complete security monitoring environment that includes:
+AdversaryLab includes:
 
-- **Windows 11 Pro VM** with Azure Monitor Agent (AMA)
-- **Microsoft Sentinel** SIEM/SOAR platform with 12+ security solutions
-- **Log Analytics Workspace** for centralized logging
-- **Data Collection Rules** for comprehensive VM monitoring
-- **VNet Flow Logs** with Traffic Analytics for network visibility
-- **Azure Activity Logs** for tenant management monitoring
-- **Network Security Groups** with controlled access
-- **Blue Team Tools** - Sysmon, PowerShell logging, Windows audit policies
-- **Red Team Tools** - Azure/Entra ID security assessment tooling (optional)
-
-## Repository Structure
-
-```
-adversary-lab/
-├── README.md                              # Documentation
-├── CONTRIBUTING.md                        # Architecture and contributor guide
-├── adversary_lab_deploy.ps1               # Main deployment script
-├── main.bicep                             # Resource Group deployment orchestration
-├── main_subscription.bicep                # Subscription-level resources
-│
-├── modules/                               # Bicep modules (layered architecture)
-│   ├── networking.bicep                   # Virtual network, NSG, public IP
-│   ├── storage.bicep                      # Storage account for flow logs
-│   ├── log_analytics.bicep                # Log Analytics workspace
-│   ├── vm.bicep                           # Windows VM with auto-shutdown
-│   ├── sentinel.bicep                     # Microsoft Sentinel + solutions
-│   ├── vm_monitoring.bicep                # AMA extension + Data Collection Rules
-│   ├── network_monitoring.bicep           # VNet flow logs (subscription scope)
-│   └── network_monitoring_flowlog.bicep   # Flow log resource (nested module)
-│
-├── scripts/                               # Post-deployment scripts
-│   ├── AdversaryLab-BlueTeam.ps1          # Sysmon, PS logging, audit policies (install/remove/test)
-│   └── AdversaryLab-RedTeam.ps1           # Offensive security tools (install/remove/test)
-│
-└── cheatsheets/
-    └── Azure_Log_Reference.md             # Reference for Entra and Activity Logs
-```
+- **Windows 11 Pro VM** with Azure Monitor Agent
+- **Ubuntu 24.04 LTS VM** with Azure Monitor Agent
+- **Microsoft Sentinel** enabled on the shared Log Analytics workspace
+- **Separate Windows and Linux Data Collection Rules (DCRs)**
+- **Windows event collection** for Security, PowerShell, Defender, System, and Sysmon channels
+- **Linux Syslog collection** for operating system and Sysmon for Linux events
+- **Azure Activity Logs**
+- **VNet Flow Logs** with Traffic Analytics
+- **Network Security Group controls** restricting RDP and SSH to your public IP
+- **Blue Team tooling** for Windows Sysmon, PowerShell logging, and audit policy
+- **Sysmon for Linux bootstrap**
+- **Optional Red Team tooling** for Azure and Entra ID security testing
 
 ## Architecture
 
-![Adversary Lab Architecture](./img/Arch.png)
+![AdversaryLab dual-endpoint Azure architecture](./img/AdversaryLab-Architecture.png)
 
-The lab deploys across two Azure scopes:
+The lab uses a shared virtual network and Log Analytics workspace with separate Windows and Linux collection paths. Data Collection Rules configure each Azure Monitor Agent; endpoint telemetry is then delivered to Log Analytics, where Microsoft Sentinel provides detection, investigation, and hunting. Azure Activity and VNet Flow Logs add subscription and network telemetry.
 
-| Scope | Resources | Deployment |
-|-------|-----------|------------|
-| **Resource Group** | VM, networking, Log Analytics, Sentinel, storage | Automated |
-| **Subscription** | Azure Activity logs, VM role assignments, VNet flow logs | Automated |
+Both endpoints share the same virtual network and NSG. RDP (3389) and SSH (22) are restricted to the public IP supplied during deployment.
 
-<br>
+## Repository Structure
 
-> [!TIP]
->  **Contributors:** See [CONTRIBUTING.md](CONTRIBUTING.md) for module architecture and dependency layers.
+```text
+adversary-lab/
+├── README.md
+├── CONTRIBUTING.md
+├── CHANGELOG.md
+├── adversary_lab_deploy.ps1
+├── main.bicep
+├── main_subscription.bicep
+│
+├── img/
+│   └── AdversaryLab-Architecture.svg
+│
+├── modules/
+│   ├── networking.bicep
+│   ├── storage.bicep
+│   ├── log_analytics.bicep
+│   ├── vm.bicep
+│   ├── linux_vm.bicep
+│   ├── vm_monitoring.bicep
+│   ├── linux_vm_monitoring.bicep
+│   ├── sentinel.bicep
+│   ├── network_monitoring.bicep
+│   └── network_monitoring_flowlog.bicep
+│
+├── scripts/
+│   ├── AdversaryLab-BlueTeam.ps1
+│   ├── AdversaryLab-RedTeam.ps1
+│   └── Install-SysmonLinux.sh
+│
+└── cheatsheets/
+    └── Azure_Log_Reference.md
+```
 
-<br>
+## What Gets Deployed
+
+### Windows endpoint
+
+Default size: `Standard_D2s_v4`
+
+The Windows DCR collects:
+
+- Security event log
+- Microsoft-Windows-PowerShell/Operational
+- Microsoft-Windows-Windows Defender/Operational
+- System critical/error events
+- Microsoft-Windows-Sysmon/Operational
+- Selected performance counters
+
+Windows events are sent to the Log Analytics `Event` table.
+
+### Linux endpoint
+
+Default size: `Standard_B2s`
+
+Image:
+
+- Canonical Ubuntu 24.04 LTS
+- Offer: `ubuntu-24_04-lts`
+- SKU: `server`
+
+The Linux DCR currently collects all Syslog facilities and severities. This broad configuration is intentional for lab validation and should be tuned if ingestion volume becomes excessive.
+
+Linux events are sent to the Log Analytics `Syslog` table.
+
+### Shared services
+
+- Log Analytics workspace
+- Microsoft Sentinel
+- Azure Activity diagnostic logs
+- VNet Flow Logs
+- Storage account for flow logs
+- Network Watcher integration
+- Monthly budget alert when an email address is supplied
+- Daily VM auto-shutdown
 
 ## Prerequisites
 
-### Required Software
+### Required software
 
 | Software | Installation |
-|----------|--------------|
+|---|---|
 | PowerShell 7 | `winget install --id Microsoft.PowerShell --source winget` |
 | Azure PowerShell (Az) | `Install-Module -Name Az -Repository PSGallery -Force` |
 | VS Code | `winget install -e --id Microsoft.VisualStudioCode` |
 | Git | `winget install Git.Git` |
 | Bicep CLI | `winget install -e --id Microsoft.Bicep` |
 
-### Azure Requirements
+### Azure requirements
 
-- Azure subscription with **Contributor** permissions
-- Ability to create resources at both **Resource Group** and **Subscription** levels
-- Valid email address for notifications (optional)
+- Azure subscription
+- Contributor-equivalent permissions for the resources being deployed
+- Permission to create subscription-scope diagnostic settings and flow-log resources
+- Valid notification email if budget/shutdown notifications are enabled
 
-### Network Requirements
+### Network requirements
 
-- Public IP address for RDP access (auto-detected if not specified)
-- Outbound internet connectivity for VM updates and monitoring
+- Public IP address for management access
+- Outbound internet access from both endpoints
+- RDP 3389 restricted to your public IP
+- SSH 22 restricted to your public IP
 
 ## Quick Start
 
-### 1. Clone the Repository
+### 1. Clone the repository
 
 ```powershell
-mkdir ~/projects
-cd ~/projects
-git clone https://github.com/purpleshellsecurity/adversary_lab.git
-cd adversary_lab
+git clone https://github.com/purpleshellsecurity/AdversaryLab.git
+cd AdversaryLab
 ```
 
-### 2. Deploy the Lab
+### 2. Deploy the lab
+
+Run from PowerShell 7:
 
 ```powershell
-# Run from PowerShell 7 terminal
 ./adversary_lab_deploy.ps1
 ```
 
-The interactive deployment will prompt for:
-- Resource Group name and Azure region
+The deployment script prompts for:
+
+- Resource group
+- Azure region
 - Subscription ID
-- VM administrator credentials (or auto-generate password)
-- Your public IP for RDP access (auto-detected)
-- Email for notifications (optional)
+- Administrator username/password
+- Public IP allowed through the NSG
+- Optional notification email
+- Auto-shutdown settings
 
-<br>
+The deployment creates both endpoints and prints:
 
+- Windows VM name and public IP
+- Linux VM name and public IP
+- RDP command
+- SSH command
+- Log Analytics workspace
+- Sentinel link
 
-> [!NOTE]
-> If you encounter an execution policy error, run:
-> ```powershell
-> powershell -ExecutionPolicy Bypass -File .\adversary_lab_deploy.ps1
-> ```
-
-<br>
-
+Credentials are also written to `credentials.txt` in the deployment directory.
 
 > [!WARNING]
-> This lab creates real Azure resources that incur costs. Monitor your spending and use the [Azure Pricing Calculator](https://azure.microsoft.com/en-us/pricing/calculator/) for estimates.
+> `credentials.txt` contains the VM password in plaintext. Record the credentials you need and delete the file.
 
-<br>
+## Connect to the Endpoints
 
-## Deployed Components
+### Windows
 
-### Core Infrastructure
+```text
+mstsc /v:<WINDOWS_PUBLIC_IP>
+```
 
-| Component | Description |
-|-----------|-------------|
-| Windows 11 Pro VM | Latest patches, Premium SSD, system-assigned managed identity |
-| Virtual Network | 10.0.0.0/16 address space with security groups |
-| Public IP | Static IP with RDP access restricted to your IP |
-| Storage Account | Encrypted storage for VNet flow logs |
-
-### Monitoring & Security
-
-| Component | Description |
-|-----------|-------------|
-| Log Analytics Workspace | Centralized logging with configurable retention |
-| Microsoft Sentinel | SIEM/SOAR with 12 security solutions pre-installed |
-| Azure Monitor Agent | Advanced VM telemetry collection |
-| Data Collection Rules | Security, PowerShell, Sysmon, Defender, and performance logs |
-| VNet Flow Logs | Network traffic analysis with Traffic Analytics |
-
-### Sentinel Solutions (Pre-installed)
-
-- Windows Security Events
-- Azure Activity
-- Microsoft Entra ID
-- Azure Storage
-- Azure Network Security Groups
-- Azure Resource Graph
-- Azure Security Benchmark
-- Azure Logic Apps
-- Azure Key Vault
-- DNS Essentials
-- Azure Firewall
-- Windows Firewall
-
-### Cost Management
-
-| Feature | Default |
-|---------|---------|
-| Auto-shutdown | 11:30 PM daily (configurable) |
-| Budget alerts | $50/month threshold (requires email) |
-| Resource tagging | Environment, Project, Purpose tags on all supported resources (override with `-tags`) |
-
-## Post-Deployment Steps
-
-### 1. Configure Entra ID Logs (Manual)
-
-Due to elevated permissions required, configure Entra ID diagnostic logs manually:
-
-1. Navigate to **Azure Portal** → **Microsoft Entra ID** → **Diagnostic settings**
-2. Click **Add diagnostic setting**
-3. Configure:
-   - **Name**: `EntraID-AuditLogs`
-   - **Logs**: Select `AuditLogs`, `SignInLogs`, `MicrosoftGraphActivityLogs`
-   - **Destination**: Send to Log Analytics workspace
-   - **Workspace**: Select your deployed workspace
-
-**References**:
-- [Microsoft Graph Activity Logs](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/microsoftgraphactivitylogs)
-- [Azure Log Reference](/cheatsheets/Azure_Log_Reference.md)
-
-### 2. Connect to VM
-
-Use the RDP command from the deployment output:
+### Linux
 
 ```bash
-mstsc /v:<VM_PUBLIC_IP>
+ssh <ADMIN_USERNAME>@<LINUX_PUBLIC_IP>
 ```
 
-Credentials are saved to `credentials.txt` in the deployment directory.
+## Windows Blue Team Setup
 
-### 3. Install Security Tools
+`AdversaryLab-BlueTeam.ps1` manages:
 
-Run these scripts on the VM after connecting:
+- Sysmon
+- PowerShell script block logging
+- PowerShell module logging
+- PowerShell transcription
+- Windows audit policy
+- Command-line capture for process creation events
 
-| Script | What It Installs |
-|--------|------------------|
-| AdversaryLab-BlueTeam | Sysmon (SwiftOnSecurity config), PowerShell script block & module logging, transcription, Windows audit policies |
-| AdversaryLab-RedTeam | AADInternals, Az, Microsoft.Graph, GraphRunner, TokenTacticsV2, AzureHound, ROADtools, MicroBurst, PowerZure, ScoutSuite, o365spray |
+### Interactive install
 
-<br>
-> [!TIP]
-> Run `Get-Help .\scripts\AdversaryLab-RedTeam.ps1 -Full` for complete details and parameters.
-
-<br>
-
-**Blue Team (Defensive Monitoring):**
-
-One script handles install, removal, and verification via `-Action`:
+Run on the Windows VM as Administrator:
 
 ```powershell
-# Install Sysmon, PowerShell logging, and Windows audit policies
-.\scripts\AdversaryLab-BlueTeam.ps1
-
-# Or select specific components
-.\scripts\AdversaryLab-BlueTeam.ps1 -Component Sysmon
-.\scripts\AdversaryLab-BlueTeam.ps1 -Component PSLogging,AuditPolicy
-
-# Preview without changing anything
-.\scripts\AdversaryLab-BlueTeam.ps1 -WhatIf
-
-# Unattended - safe for Custom Script Extension / Invoke-AzVMRunCommand
-.\scripts\AdversaryLab-BlueTeam.ps1 -Action Install -Force
+.\scripts\AdversaryLab-BlueTeam.ps1 -Action Install
 ```
 
-**Verify telemetry is actually flowing** (locally, without waiting on ingestion):
+Install only Sysmon:
+
+```powershell
+.\scripts\AdversaryLab-BlueTeam.ps1 -Action Install -Component Sysmon
+```
+
+### Unattended install
+
+Use `-Yes` to skip the confirmation prompt without forcing a reinstall:
+
+```powershell
+.\scripts\AdversaryLab-BlueTeam.ps1 -Action Install -Yes
+```
+
+Use `-Force` when you intentionally want to skip the prompt and reinstall selected components even if they are already present:
+
+```powershell
+.\scripts\AdversaryLab-BlueTeam.ps1 -Action Install -Component Sysmon -Force
+```
+
+This distinction matters when using `Invoke-AzVMRunCommand`: a run-command execution cannot answer an interactive `Read-Host` prompt.
+
+### Verify locally
 
 ```powershell
 .\scripts\AdversaryLab-BlueTeam.ps1 -Action Test
 ```
 
-Reports, per component, whether it is configured *and* whether events are
-arriving in the last 60 minutes, plus Azure Monitor Agent status. Exits `2`
-when anything is unhealthy, so it can gate automation.
-
-> [!NOTE]
-> Installing Sysmon registers a new event channel that the Data Collection Rule
-> already references. The script restarts the Azure Monitor Agent afterwards so
-> the channel is picked up without waiting for a reboot. Use `-SkipAgentRestart`
-> to opt out.
-
-> [!TIP]
-> Install records what it changed to `C:\ProgramData\AdversaryLab\blueteam-state.json`.
-> `-Action Remove` reverses only those changes — restoring prior audit settings
-> and registry values, and leaving alone anything that pre-dated the script.
-
-**Red Team (Offensive Tools):**
+For Sysmon specifically:
 
 ```powershell
-# Install everything
-.\scripts\AdversaryLab-RedTeam.ps1
+Get-Service Sysmon*
 
-# Select components
-.\scripts\AdversaryLab-RedTeam.ps1 -Component PSModules,AzureHound
-
-# Preview without changing anything
-.\scripts\AdversaryLab-RedTeam.ps1 -WhatIf
-
-# What is currently installed?
-.\scripts\AdversaryLab-RedTeam.ps1 -Action Test
-
-# Also install the retired modules (AzureADPreview, MSOnline)
-.\scripts\AdversaryLab-RedTeam.ps1 -Component PSModules -IncludeRetired
+Get-WinEvent -FilterHashtable @{
+    LogName   = 'Microsoft-Windows-Sysmon/Operational'
+    StartTime = (Get-Date).AddMinutes(-30)
+} |
+Select-Object -First 10 TimeCreated, Id, ProviderName
 ```
 
-> [!NOTE]
-> Module installs go through `Install-PSResource` (PSResourceGet), which the
-> script bootstraps if it is missing. `Az` alone pulls 102 dependent modules and
-> `Microsoft.Graph` another 39; PowerShellGet's `Install-Module` walks those
-> serially, which is what made a first run take so long. `AzureADPreview` and
-> `MSOnline` are skipped unless you pass `-IncludeRetired` - Azure AD Graph is
-> decommissioned, so most of their cmdlets fail at runtime anyway.
+### Windows Sysmon reboot note
 
-> [!WARNING]
-> This adds a Windows Defender exclusion for `C:\AzureRedTeamTools` and installs
-> offensive tooling. Run it only on a dedicated, isolated lab VM.
+On Windows 11, Sysmon installation can occasionally require one reboot before the service and event channel are fully available. If the Blue Team script reports that Sysmon did not start and requires a reboot, complete any Windows first-run setup that is blocking normal sign-in, reboot the VM, and rerun:
 
-**Uninstall (if needed):**
 ```powershell
-.\scripts\AdversaryLab-BlueTeam.ps1 -Action Remove
-.\scripts\AdversaryLab-BlueTeam.ps1 -Action Remove -KeepTranscripts
-
-.\scripts\AdversaryLab-RedTeam.ps1  -Action Remove
-.\scripts\AdversaryLab-RedTeam.ps1  -Action Remove -RemoveChocolatey
+.\scripts\AdversaryLab-BlueTeam.ps1 -Action Install -Component Sysmon
 ```
 
-> [!TIP]
-> Both scripts record what they installed to `C:\ProgramData\AdversaryLab\`.
-> `-Action Remove` reverses only those changes, so software that pre-dated the
-> lab (your own git, Python, or Defender exclusions) is left alone.
+Do not treat this condition as an Azure Monitor or DCR failure. Verify Sysmon locally first.
 
-### 4. Verify Data Collection
+## Linux Sysmon Setup
 
-Wait 10-15 minutes for initial data flow, then validate with these KQL queries:
+The Linux installer supports Ubuntu 24.04 and 22.04. Ubuntu 24.04 is the validated lab image.
 
-```kql
-// Azure Activity (Management) Events
-AzureActivity
-| where TimeGenerated > ago(2h)
-| project TimeGenerated, OperationName, OperationNameValue
-| take 10
+Copy or execute `scripts/Install-SysmonLinux.sh` on the Linux VM as root.
 
-// PowerShell Logs
+Example through Azure Run Command:
+
+```powershell
+Invoke-AzVMRunCommand `
+    -ResourceGroupName '<RESOURCE_GROUP>' `
+    -VMName '<LINUX_VM_NAME>' `
+    -CommandId 'RunShellScript' `
+    -ScriptPath './scripts/Install-SysmonLinux.sh'
+```
+
+The script installs:
+
+- Microsoft package repository
+- `sysinternalsebpf`
+- `sysmonforlinux`
+
+It then enables the `sysmon` systemd service and prints recent local Sysmon events.
+
+### Verify locally
+
+```bash
+systemctl status sysmon --no-pager
+journalctl -u sysmon --no-pager -n 20
+grep -i sysmon /var/log/syslog | tail -n 20
+```
+
+Sysmon for Linux writes XML-formatted events through syslog. AMA then forwards those records through the Linux DCR into the Log Analytics `Syslog` table.
+
+## Verify End-to-End Telemetry
+
+### Windows base events
+
+```kusto
 Event
-| where Source == "Microsoft-Windows-PowerShell"
-| where TimeGenerated > ago(24h)
-| take 10
+| where TimeGenerated > ago(30m)
+| where _ResourceId has "<WINDOWS_VM_NAME>"
+| summarize Count=count(), LastSeen=max(TimeGenerated)
+```
 
-// Sysmon Events
+### Windows Sysmon
+
+```kusto
 Event
+| where TimeGenerated > ago(30m)
+| where _ResourceId has "<WINDOWS_VM_NAME>"
 | where Source == "Microsoft-Windows-Sysmon"
-| where TimeGenerated > ago(24h)
-| take 10
-
-// VNet Flow Logs (Traffic Analytics)
-NTANetAnalytics
-| where TimeGenerated > ago(6h)
-| take 10
-```
-<br>
-
-> [!NOTE]
-> Azure Activity Logs can take up to an hour to provision depending on service load.
-
-<br>
-
-## Attack Simulation Scenarios
-
-The lab supports various security testing scenarios:
-
-| Scenario | Description |
-|----------|-------------|
-| Credential Attacks | Password spraying, brute force detection |
-| Privilege Escalation | Local privilege escalation simulation |
-| Lateral Movement | Network discovery and movement patterns |
-| Data Exfiltration | File transfer and data staging detection |
-| Persistence | Registry modifications, scheduled tasks |
-
-## Troubleshooting
-
-### Permission Errors
-
-- Ensure you have **Contributor** role on the subscription
-- Refresh credentials: `Connect-AzAccount -Force`
-- Verify region availability for your VM size
-
-### Deployment Failures
-
-- Verify all Bicep files are present in `modules/` directory
-- Check Azure service availability in your region
-- Review deployment output for specific error messages
-
-### Network Connectivity
-
-- Verify your public IP was correctly detected
-- Check NSG rules allow RDP (port 3389) from your IP
-- Confirm VM has started successfully in the portal
-
-### Data Collection Issues
-
-- Wait 15-30 minutes for initial data ingestion
-- Verify Azure Monitor Agent status: `Get-AzVMExtension -VMName <name> -ResourceGroupName <rg>`
-- Check Data Collection Rule associations in the portal
-
-## Cost Optimization
-
-### Automatic Controls
-
-| Feature | Default | How to Customize |
-|---------|---------|------------------|
-| VM auto-shutdown | 11:30 PM EST daily | Pass `-ShutdownTime` and `-ShutdownTimeZone` parameters |
-| Budget alerts | $50/month threshold | Requires email during setup |
-| Resource tagging | Environment, Project, Purpose | Edit `main.bicep` |
-
-**Customizing Auto-Shutdown:**
-
-```powershell
-# Example: Set shutdown to 7:00 PM Pacific Time
-./adversary_lab_deploy.ps1 -ShutdownTime "1900" -ShutdownTimeZone "Pacific Standard Time"
+| summarize Count=count(), LastSeen=max(TimeGenerated)
 ```
 
-Available parameters:
-- `-ShutdownTime`: 24-hour format (e.g., `"1900"` for 7:00 PM, `"2330"` for 11:30 PM)
-- `-ShutdownTimeZone`: Windows timezone name (e.g., `"Eastern Standard Time"`, `"UTC"`)
-- `-EnableAutoShutdown`: Set to `$false` to disable auto-shutdown entirely
+### Linux base Syslog
 
-<br>
+```kusto
+Syslog
+| where TimeGenerated > ago(30m)
+| where _ResourceId has "<LINUX_VM_NAME>"
+| summarize Count=count(), LastSeen=max(TimeGenerated)
+```
+
+### Linux Sysmon
+
+```kusto
+Syslog
+| where TimeGenerated > ago(30m)
+| where _ResourceId has "<LINUX_VM_NAME>"
+| where ProcessName =~ "sysmon"
+| summarize Count=count(), LastSeen=max(TimeGenerated)
+```
+
+### Parse Sysmon for Linux XML
+
+```kusto
+Syslog
+| where TimeGenerated > ago(30m)
+| where ProcessName =~ "sysmon"
+| where SyslogMessage has "<EventID>"
+| extend EventID = toint(extract(@"<EventID>(\d+)</EventID>", 1, SyslogMessage))
+| extend User = extract(@"<Data Name=""User"">([^<]+)</Data>", 1, SyslogMessage)
+| extend Image = extract(@"<Data Name=""Image"">([^<]+)</Data>", 1, SyslogMessage)
+| extend CommandLine = extract(@"<Data Name=""CommandLine"">([^<]+)</Data>", 1, SyslogMessage)
+| extend ParentImage = extract(@"<Data Name=""ParentImage"">([^<]+)</Data>", 1, SyslogMessage)
+| project TimeGenerated, Computer, EventID, User, Image, CommandLine, ParentImage
+| order by TimeGenerated desc
+```
+
+### Azure Activity
+
+```kusto
+AzureActivity
+| where TimeGenerated > ago(1h)
+| summarize Count=count(), LastSeen=max(TimeGenerated)
+```
 
 > [!NOTE]
-> If you want a specific timezone you can look it up with this PS command. Ensure to use StandardName when configuring the timezone.
-> ```powershell
-> Get-Timezone -Name "*astern*" | Format-Table Id, DisplayName, StandardName
-> ```
+> Azure Monitor ingestion is asynchronous. A DCR, DCR association, and running AMA prove configuration state; the queries above prove data-plane delivery. Initial heartbeat or event ingestion can lag behind resource deployment.
 
-<br>
+## Data Sources
 
-### Manual Savings
+### Windows
 
-- Stop VM when not in use
-- Reduce Log Analytics retention if historical data isn't needed
-- Review and tune Data Collection Rules to reduce log volume
+| Source | Destination |
+|---|---|
+| Security | `Event` |
+| PowerShell Operational | `Event` |
+| Windows Defender Operational | `Event` |
+| System critical/error | `Event` |
+| Sysmon Operational | `Event` |
+| Performance counters | `Perf` |
 
-### Estimated Monthly Costs (East US)
+### Linux
 
-| Resource | 24/7 Running | With Auto-shutdown |
-|----------|--------------|-------------------|
-| Standard_D2s_v4 VM | ~$85/month | ~$35-45/month |
-| Log Analytics | ~$5-15/month | ~$5-15/month |
-| Storage (flow logs) | ~$1-5/month | ~$1-5/month |
-| **Total** | **~$90-105/month** | **~$40-65/month** |
+| Source | Destination |
+|---|---|
+| Syslog | `Syslog` |
+| Sysmon for Linux through syslog | `Syslog` |
 
-<br>
+## Entra ID Logs
 
-> [!TIP]
-> Use the [Azure Pricing Calculator](https://azure.microsoft.com/en-us/pricing/calculator/) for accurate estimates.
+Entra ID logs are not automatically configured by the resource-group deployment.
+
+To add them manually:
+
+1. Open **Microsoft Entra ID**
+2. Open **Diagnostic settings**
+3. Create a diagnostic setting
+4. Select the desired logs, such as:
+   - `AuditLogs`
+   - `SignInLogs`
+   - `MicrosoftGraphActivityLogs`
+5. Send them to the AdversaryLab Log Analytics workspace
+
+## Cost Controls
+
+The lab includes:
+
+- Daily auto-shutdown for both VMs
+- A monthly budget resource when a notification email is configured
+- Configurable Log Analytics retention
+- Separate VM sizes for Windows and Linux
+
+Defaults:
+
+| Resource | Default |
+|---|---|
+| Windows VM | `Standard_D2s_v4` |
+| Linux VM | `Standard_B2s` |
+| Auto-shutdown | 23:30 Eastern |
+| Log Analytics retention | 30 days |
+| Budget amount | $50 monthly |
+| Budget notification | 80% of configured budget |
+
+Actual Azure cost depends heavily on region, runtime, and Log Analytics ingestion volume. The Linux DCR currently collects all syslog facilities and severities, and Windows PowerShell module logging is configured broadly, so telemetry volume should be reviewed if the lab is left running for long periods.
+
+Use the Azure Pricing Calculator for current pricing rather than relying on a static monthly estimate.
 
 ## Security Considerations
 
-### Network Security
-
-- RDP access restricted to your public IP only
-- NSG rules follow principle of least privilege
-- No public access to Log Analytics workspace
-
-### VM Security
-
-- Windows 11 with automatic security updates
-- System-assigned managed identity for Azure operations
-- Azure Monitor Agent for comprehensive logging
-- Boot diagnostics enabled
-
-### Data Protection
-
-- All logs encrypted at rest and in transit
-- Configurable retention periods
-- Azure RBAC for access control
+- RDP and SSH are restricted to the public IP supplied during deployment
+- Both VMs use system-assigned managed identities
+- Both endpoints have public IP addresses for lab accessibility
+- This is a security testing environment, not a production reference architecture
+- Offensive tooling should only be installed and used in environments you own or are explicitly authorized to test
+- Delete `credentials.txt` after recording the credentials
 
 ## Cleanup
 
-All lab resources are contained in a single resource group. To remove everything:
+Most lab resources are deployed into the selected resource group.
 
-1. Navigate to **Azure Portal** → **Resource Groups**
-2. Select your lab resource group
-3. Click **Delete resource group**
+Delete the resource group when finished:
 
-<br>
+```powershell
+Remove-AzResourceGroup -Name '<RESOURCE_GROUP>'
+```
 
-> [!NOTE]
-> The `NetworkWatcherRG` resource group (containing the flow log) may need to be cleaned up separately if you no longer need Network Watcher in that region.
-
-<br>
-<br>
-
-
+Network Watcher resources may exist in `NetworkWatcherRG` and may require separate cleanup if they are no longer needed.
 
 ## Contributing
 
-Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for architecture details and guidelines.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for architecture and contribution guidance.
 
-Areas for enhancement:
-- Additional Sentinel detection rules
-- Custom attack simulation scripts
-- Additional security solutions
-- Documentation improvements
-- Cost optimization features
+Useful contribution areas include:
+
+- Additional Windows and Linux detections
+- DCR tuning
+- Detection validation scenarios
+- Sysmon configuration improvements
+- Attack simulation scripts
+- Cost optimization
+- Documentation
 
 ## Additional Resources
 
-- [Microsoft Sentinel Documentation](https://docs.microsoft.com/en-us/azure/sentinel/)
-- [Azure Monitor Agent Overview](https://docs.microsoft.com/en-us/azure/azure-monitor/agents/azure-monitor-agent-overview)
-- [KQL Quick Reference](https://docs.microsoft.com/en-us/azure/data-explorer/kql-quick-reference)
-- [Windows Security Events Reference](https://docs.microsoft.com/en-us/windows/security/threat-protection/auditing/security-auditing-overview)
+- [Microsoft Sentinel documentation](https://learn.microsoft.com/azure/sentinel/)
+- [Azure Monitor Agent overview](https://learn.microsoft.com/azure/azure-monitor/agents/azure-monitor-agent-overview)
+- [KQL quick reference](https://learn.microsoft.com/kusto/query/kql-quick-reference)
+- [Windows security auditing](https://learn.microsoft.com/windows/security/threat-protection/auditing/security-auditing-overview)
 
-<br>
-
->[!NOTE]
-> **Ready to start building detections?** Join ([Adversary Lab](https://www.skool.com/adversary-lab-community/about))
-
-<br>
+> [!NOTE]
+> Ready to start building detections? Join [Adversary Lab](https://www.skool.com/adversary-lab-community/about).
 
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
 
-> ⚠️ **Disclaimer:** This project is provided as-is for educational and testing purposes. Do not deploy within any tenant other than your own without prior authorization and written consent.
+> [!WARNING]
+> This project is provided as-is for educational and authorized security testing only. Do not deploy or use it in a tenant or environment without permission.
