@@ -1,39 +1,20 @@
----
-name: Bug Report
-about: Report a bug or issue with the deployment
-title: '[BUG] '
-labels: bug
-assignees: ''
----
+## Summary
+Brief description of what this PR does.
 
-## Describe the Bug
-A clear description of what the bug is.
+## Type of Change
+- [ ] New Bicep module
+- [ ] Script update
+- [ ] Bug fix
+- [ ] Documentation
+- [ ] Security improvement
 
-## Steps to Reproduce
-1. Run '...'
-2. See error
+## Testing Done
+- [ ] `az bicep build --file main.bicep` passes locally
+- [ ] What-if deployment ran successfully
+- [ ] Tested end-to-end in an isolated subscription
 
-## Expected Behavior
-What you expected to happen.
-
-## Actual Behavior
-What actually happened.
-
-## Environment
-- **OS:** (e.g., Windows 11, macOS)
-- **PowerShell Version:** (run `$PSVersionTable.PSVersion`)
-- **Azure CLI Version:** (run `az --version`)
-- **Bicep Version:** (run `az bicep version`)
-- **Azure Region:** 
-- **Subscription Type:** (e.g., Pay-as-you-go, Visual Studio Enterprise)
-
-## Error Output
-```
-Paste any error messages here
-```
-
-## Screenshots
-If applicable, add screenshots.
-
-## Additional Context
-Any other relevant information.
+## Checklist
+- [ ] Module placed in correct dependency layer (see CONTRIBUTING.md)
+- [ ] No credentials, IPs, or secrets hardcoded
+- [ ] Outputs added for anything other modules need
+- [ ] README updated if user-facing behavior changed

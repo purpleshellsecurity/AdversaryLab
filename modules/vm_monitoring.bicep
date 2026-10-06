@@ -2,6 +2,9 @@
 // Dependencies: vm (vmResourceId), log_analytics (workspaceResourceId)
 
 param location string
+
+@description('Tags applied to resources')
+param tags object = {}
 param namePrefix string
 param vmResourceId string
 param workspaceResourceId string
@@ -35,6 +38,7 @@ resource amaExtension 'Microsoft.Compute/virtualMachines/extensions@2023-09-01' 
 resource dcr 'Microsoft.Insights/dataCollectionRules@2023-03-11' = {
   name: dcrName
   location: location
+  tags: tags
   properties: {
     dataSources: {
       windowsEventLogs: [

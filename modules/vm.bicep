@@ -2,6 +2,9 @@
 // Dependencies: networking (subnetId, publicIpId)
 
 param location string
+
+@description('Tags applied to resources')
+param tags object = {}
 param namePrefix string
 param adminUsername string
 
@@ -38,6 +41,7 @@ var computerName = take('${replace(namePrefix, '-', '')}vm', 15)
 resource nic 'Microsoft.Network/networkInterfaces@2023-11-01' = {
   name: nicName
   location: location
+  tags: tags
   properties: {
     ipConfigurations: [
       {
@@ -59,6 +63,7 @@ resource nic 'Microsoft.Network/networkInterfaces@2023-11-01' = {
 resource vm 'Microsoft.Compute/virtualMachines@2024-07-01' = {
   name: vmName
   location: location
+  tags: tags
   properties: {
     hardwareProfile: {
       vmSize: vmSize
@@ -81,7 +86,7 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-07-01' = {
       imageReference: {
         publisher: 'microsoftwindowsdesktop'
         offer: 'windows-11'
-        sku: 'win11-24h2-pro'
+        sku: 'win11-25h2-pro'
         version: 'latest'
       }
       osDisk: {
@@ -92,12 +97,16 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-07-01' = {
           storageAccountType: 'Premium_LRS'
         }
         diskSizeGB: 128
+        deleteOption: 'Delete'
       }
     }
     networkProfile: {
       networkInterfaces: [
         {
           id: nic.id
+          properties: {
+            deleteOption: 'Delete'
+          }
         }
       ]
     }
@@ -116,6 +125,7 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-07-01' = {
 resource vmShutdownSchedule 'Microsoft.DevTestLab/schedules@2018-09-15' = if (enableAutoShutdown) {
   name: 'shutdown-computevm-${vmName}'
   location: location
+  tags: tags
   properties: {
     status: 'Enabled'
     taskType: 'ComputeVmShutdownTask'

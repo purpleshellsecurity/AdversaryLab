@@ -5,6 +5,9 @@
 targetScope = 'subscription'
 
 param location string
+
+@description('Tags applied to resources')
+param tags object = {}
 param vnetResourceId string
 param storageAccountId string
 param workspaceResourceId string = ''
@@ -33,6 +36,7 @@ module flowLogDeploy 'network_monitoring_flowlog.bicep' = {
     storageAccountId: storageAccountId
     workspaceResourceId: workspaceResourceId
     retentionDays: retentionDays
+    tags: tags
   }
 }
 

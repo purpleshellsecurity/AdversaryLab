@@ -4,6 +4,9 @@
 @description('Location for all resources')
 param location string
 
+@description('Tags applied to resources')
+param tags object = {}
+
 @description('Name prefix for resources')
 param namePrefix string
 
@@ -41,11 +44,7 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2024-01-01' = {
       defaultAction: 'Allow'
     }
   }
-  tags: {
-    Environment: 'Development'
-    Project: namePrefix
-    Purpose: 'FlowLogs'
-  }
+  tags: union(tags, { Purpose: 'FlowLogs' })
 }
 
 // Outputs

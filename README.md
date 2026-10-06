@@ -37,10 +37,8 @@ adversary-lab/
 │   └── network_monitoring_flowlog.bicep   # Flow log resource (nested module)
 │
 ├── scripts/                               # Post-deployment scripts
-│   ├── Install-BlueTeamTools.ps1          # Sysmon, PS logging, audit policies
-│   ├── Install-RedTeamTools.ps1           # Offensive security tools
-│   ├── Uninstall-BlueTeamTools.ps1        # Remove defensive tools
-│   └── Uninstall-RedTeamTools.ps1         # Remove offensive tools
+│   ├── AdversaryLab-BlueTeam.ps1          # Sysmon, PS logging, audit policies (install/remove/test)
+│   └── AdversaryLab-RedTeam.ps1           # Offensive security tools (install/remove/test)
 │
 └── cheatsheets/
     └── Azure_Log_Reference.md             # Reference for Entra and Activity Logs
@@ -171,7 +169,7 @@ The interactive deployment will prompt for:
 |---------|---------|
 | Auto-shutdown | 11:30 PM daily (configurable) |
 | Budget alerts | $50/month threshold (requires email) |
-| Resource tagging | Environment, Project, Purpose tags |
+| Resource tagging | Environment, Project, Purpose tags on all supported resources (override with `-tags`) |
 
 ## Post-Deployment Steps
 
@@ -207,41 +205,99 @@ Run these scripts on the VM after connecting:
 
 | Script | What It Installs |
 |--------|------------------|
-| Install-BlueTeamTools | Sysmon (SwiftOnSecurity config), PowerShell script block & module logging, transcription, Windows audit policies |
-| Install-RedTeamTools | AADInternals, Az, Microsoft.Graph, GraphRunner, TokenTacticsV2, AzureHound, ROADtools, MicroBurst, PowerZure, ScoutSuite, o365spray |
+| AdversaryLab-BlueTeam | Sysmon (SwiftOnSecurity config), PowerShell script block & module logging, transcription, Windows audit policies |
+| AdversaryLab-RedTeam | AADInternals, Az, Microsoft.Graph, GraphRunner, TokenTacticsV2, AzureHound, ROADtools, MicroBurst, PowerZure, ScoutSuite, o365spray |
 
 <br>
 > [!TIP]
-> Run `Get-Help .\scripts\Install-RedTeamTools.ps1 -Full` for complete details and parameters.
+> Run `Get-Help .\scripts\AdversaryLab-RedTeam.ps1 -Full` for complete details and parameters.
 
 <br>
 
 **Blue Team (Defensive Monitoring):**
+
+One script handles install, removal, and verification via `-Action`:
+
 ```powershell
 # Install Sysmon, PowerShell logging, and Windows audit policies
-.\scripts\Install-BlueTeamTools.ps1
+.\scripts\AdversaryLab-BlueTeam.ps1
 
-# Or install specific components
-.\scripts\Install-BlueTeamTools.ps1 -Sysmon
-.\scripts\Install-BlueTeamTools.ps1 -PSLogging
-.\scripts\Install-BlueTeamTools.ps1 -AuditPolicies
+# Or select specific components
+.\scripts\AdversaryLab-BlueTeam.ps1 -Component Sysmon
+.\scripts\AdversaryLab-BlueTeam.ps1 -Component PSLogging,AuditPolicy
+
+# Preview without changing anything
+.\scripts\AdversaryLab-BlueTeam.ps1 -WhatIf
+
+# Unattended - safe for Custom Script Extension / Invoke-AzVMRunCommand
+.\scripts\AdversaryLab-BlueTeam.ps1 -Action Install -Force
 ```
+
+**Verify telemetry is actually flowing** (locally, without waiting on ingestion):
+
+```powershell
+.\scripts\AdversaryLab-BlueTeam.ps1 -Action Test
+```
+
+Reports, per component, whether it is configured *and* whether events are
+arriving in the last 60 minutes, plus Azure Monitor Agent status. Exits `2`
+when anything is unhealthy, so it can gate automation.
+
+> [!NOTE]
+> Installing Sysmon registers a new event channel that the Data Collection Rule
+> already references. The script restarts the Azure Monitor Agent afterwards so
+> the channel is picked up without waiting for a reboot. Use `-SkipAgentRestart`
+> to opt out.
+
+> [!TIP]
+> Install records what it changed to `C:\ProgramData\AdversaryLab\blueteam-state.json`.
+> `-Action Remove` reverses only those changes — restoring prior audit settings
+> and registry values, and leaving alone anything that pre-dated the script.
 
 **Red Team (Offensive Tools):**
-```powershell
-# Install Azure red team and security assessment tools
-.\scripts\Install-RedTeamTools.ps1
 
-# Skip specific components if needed
-.\scripts\Install-RedTeamTools.ps1 -SkipChocolatey
-.\scripts\Install-RedTeamTools.ps1 -SkipPython
+```powershell
+# Install everything
+.\scripts\AdversaryLab-RedTeam.ps1
+
+# Select components
+.\scripts\AdversaryLab-RedTeam.ps1 -Component PSModules,AzureHound
+
+# Preview without changing anything
+.\scripts\AdversaryLab-RedTeam.ps1 -WhatIf
+
+# What is currently installed?
+.\scripts\AdversaryLab-RedTeam.ps1 -Action Test
+
+# Also install the retired modules (AzureADPreview, MSOnline)
+.\scripts\AdversaryLab-RedTeam.ps1 -Component PSModules -IncludeRetired
 ```
+
+> [!NOTE]
+> Module installs go through `Install-PSResource` (PSResourceGet), which the
+> script bootstraps if it is missing. `Az` alone pulls 102 dependent modules and
+> `Microsoft.Graph` another 39; PowerShellGet's `Install-Module` walks those
+> serially, which is what made a first run take so long. `AzureADPreview` and
+> `MSOnline` are skipped unless you pass `-IncludeRetired` - Azure AD Graph is
+> decommissioned, so most of their cmdlets fail at runtime anyway.
+
+> [!WARNING]
+> This adds a Windows Defender exclusion for `C:\AzureRedTeamTools` and installs
+> offensive tooling. Run it only on a dedicated, isolated lab VM.
 
 **Uninstall (if needed):**
 ```powershell
-.\scripts\Uninstall-BlueTeamTools.ps1
-.\scripts\Uninstall-RedTeamTools.ps1
+.\scripts\AdversaryLab-BlueTeam.ps1 -Action Remove
+.\scripts\AdversaryLab-BlueTeam.ps1 -Action Remove -KeepTranscripts
+
+.\scripts\AdversaryLab-RedTeam.ps1  -Action Remove
+.\scripts\AdversaryLab-RedTeam.ps1  -Action Remove -RemoveChocolatey
 ```
+
+> [!TIP]
+> Both scripts record what they installed to `C:\ProgramData\AdversaryLab\`.
+> `-Action Remove` reverses only those changes, so software that pre-dated the
+> lab (your own git, Python, or Defender exclusions) is left alone.
 
 ### 4. Verify Data Collection
 

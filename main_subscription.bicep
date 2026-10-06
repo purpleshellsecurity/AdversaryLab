@@ -9,12 +9,6 @@ param workspaceName string
 @description('Enable Azure Activity Logs connector')
 param enableAzureActivity bool = true
 
-@description('VM Principal ID for role assignment')
-param vmPrincipalId string
-
-@description('VM name for role assignment naming')
-param vmName string
-
 // Reference the existing resource group
 resource rg 'Microsoft.Resources/resourceGroups@2023-07-01' existing = {
   name: resourceGroupName
@@ -42,23 +36,6 @@ resource activityLogDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-0
         }
       }
     ]
-  }
-}
-
-// Grant VM system-assigned identity contributor access to the subscription
-// NOTE: This is intentionally subscription-scoped for Stratus Red Team attack simulations
-// TODO: Scope down to resource group in production or when minimum permissions are determined
-resource contributorRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' existing = {
-  scope: subscription()
-  name: 'b24988ac-6180-42a0-ab88-20f7382dd24c'
-}
-
-resource vmContributorAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(subscription().subscriptionId, vmName, 'contributor')
-  properties: {
-    roleDefinitionId: contributorRole.id
-    principalId: vmPrincipalId
-    principalType: 'ServicePrincipal'
   }
 }
 

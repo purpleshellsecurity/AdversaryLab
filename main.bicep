@@ -44,6 +44,18 @@ param notificationEmail string = ''
 @description('Minutes before shutdown to send notification')
 param notificationMinutesBefore int = 15
 
+@description('Tags applied to every resource that supports them')
+param tags object = {
+  Environment: 'Development'
+  Project: namePrefix
+  Purpose: 'AdversaryLab'
+}
+
+@description('Suffix that makes resource names unique inside the resource group. Defaults to a stable hash of the resource group id. Seeding it on deployment().name - as this template previously did - meant deploying under a different deployment name silently produced an entirely new set of resources instead of updating the existing ones. Override this to adopt resources from an earlier deployment.')
+@minLength(3)
+@maxLength(6)
+param resourceSuffix string = substring(uniqueString(resourceGroup().id), 0, 4)
+
 @description('Start date for the budget (defaults to first day of current month)')
 param budgetStartDate string = format('{0}-{1:D2}-01', utcNow('yyyy'), int(utcNow('MM')))
 
@@ -51,7 +63,6 @@ param budgetStartDate string = format('{0}-{1:D2}-01', utcNow('yyyy'), int(utcNo
 // VARIABLES
 // ============================================================================
 
-var resourceSuffix = substring(uniqueString(resourceGroup().id, deployment().name), 0, 3)
 var uniqueNamePrefix = '${namePrefix}${resourceSuffix}'
 
 // ============================================================================
@@ -64,6 +75,7 @@ module networking 'modules/networking.bicep' = {
     location: location
     namePrefix: uniqueNamePrefix
     myIP: myIP
+    tags: tags
   }
 }
 
@@ -72,6 +84,7 @@ module storage 'modules/storage.bicep' = {
   params: {
     location: location
     namePrefix: uniqueNamePrefix
+    tags: tags
   }
 }
 
@@ -81,6 +94,7 @@ module logAnalytics 'modules/log_analytics.bicep' = {
     location: location
     namePrefix: uniqueNamePrefix
     retentionInDays: retentionInDays
+    tags: tags
   }
 }
 
@@ -104,6 +118,7 @@ module vm 'modules/vm.bicep' = {
     enableShutdownNotifications: enableShutdownNotificationEmails
     notificationEmail: notificationEmail
     notificationMinutesBefore: notificationMinutesBefore
+    tags: tags
   }
 }
 
@@ -125,6 +140,7 @@ module vmMonitoring 'modules/vm_monitoring.bicep' = {
     namePrefix: uniqueNamePrefix
     vmResourceId: vm.outputs.vmResourceId
     workspaceResourceId: logAnalytics.outputs.workspaceResourceId
+    tags: tags
   }
 }
 

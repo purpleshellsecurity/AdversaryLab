@@ -4,6 +4,9 @@
 @description('Location for all resources')
 param location string
 
+@description('Tags applied to resources')
+param tags object = {}
+
 @description('Name prefix for resources')
 param namePrefix string
 
@@ -19,6 +22,7 @@ var pipName = '${namePrefix}-pip'
 resource nsg 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
   name: nsgName
   location: location
+  tags: tags
   properties: {
     securityRules: [
       {
@@ -42,6 +46,7 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
 resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = {
   name: vnetName
   location: location
+  tags: tags
   properties: {
     addressSpace: {
       addressPrefixes: [
@@ -66,6 +71,7 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = {
 resource pip 'Microsoft.Network/publicIPAddresses@2023-11-01' = {
   name: pipName
   location: location
+  tags: tags
   sku: {
     name: 'Standard'
   }

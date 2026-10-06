@@ -1,6 +1,9 @@
 // Nested module for flow log deployment - runs within NetworkWatcherRG scope
 
 param location string
+
+@description('Tags applied to resources')
+param tags object = {}
 param networkWatcherName string
 param flowLogName string
 param vnetResourceId string
@@ -18,6 +21,7 @@ resource flowLog 'Microsoft.Network/networkWatchers/flowLogs@2024-01-01' = {
   parent: networkWatcher
   name: flowLogName
   location: location
+  tags: tags
   properties: {
     targetResourceId: vnetResourceId
     storageId: storageAccountId
