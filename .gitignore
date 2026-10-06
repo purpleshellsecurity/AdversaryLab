@@ -19,3 +19,8 @@ Thumbs.db
 # Editor
 .vscode/settings.json
 *.swp
+
+# Bicep build outputs
+main.json
+main_subscription.json
+modules/*.json

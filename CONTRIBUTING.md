@@ -4,51 +4,66 @@ Thanks for your interest in contributing! This document covers the architecture 
 
 ## Architecture Overview
 
-The lab deploys across two Azure scopes using Bicep templates orchestrated by PowerShell.
+The lab is a dual-endpoint Azure environment orchestrated by `adversary_lab_deploy.ps1`.
 
-```
-adversary_lab_deploy.ps1          # Orchestrates everything
+```text
+adversary_lab_deploy.ps1
     │
-    ├── main.bicep                # Resource Group scope
-    │   └── modules/*.bicep
+    ├── main.bicep                         # Resource-group scope
+    │   ├── networking.bicep              # VNet, NSG, Windows/Linux public IPs
+    │   ├── storage.bicep                 # Flow-log storage
+    │   ├── log_analytics.bicep           # Shared Log Analytics workspace
+    │   ├── vm.bicep                      # Windows 11 endpoint
+    │   ├── linux_vm.bicep                # Ubuntu 24.04 endpoint
+    │   ├── vm_monitoring.bicep           # Windows AMA + DCR
+    │   ├── linux_vm_monitoring.bicep     # Linux AMA + Syslog DCR
+    │   └── sentinel.bicep                # Microsoft Sentinel
     │
-    └── main_subscription.bicep   # Subscription scope (Activity logs, RBAC)
-        └── modules/network_monitoring.bicep  # Flow logs (NetworkWatcherRG)
+    ├── main_subscription.bicep           # Azure Activity diagnostic settings
+    │
+    └── modules/network_monitoring.bicep  # Subscription-scope flow-log orchestration
+        └── network_monitoring_flowlog.bicep
+            # Flow-log resource in NetworkWatcherRG
 ```
+
+The endpoint monitoring paths are intentionally separate:
+
+- Windows AMA uses a Windows DCR and sends `Microsoft-Event` and `Microsoft-Perf` to Log Analytics.
+- Linux AMA uses a Linux DCR and sends `Microsoft-Syslog` to Log Analytics.
+- Sysmon for Linux is collected through syslog.
+- Azure Activity is configured at subscription scope.
+- VNet Flow Logs are hosted under Network Watcher and use the lab storage account plus Traffic Analytics.
 
 ## Module Dependency Layers
 
-Modules are organized in layers based on their dependencies. This determines deployment order and helps identify where new modules should go.
+```text
+Layer 4: Cost Management
+  └── Budget alert
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│ Layer 4: Cost Management                                    │
-│   └── Budget alerts (conditional on email parameter)        │
-├─────────────────────────────────────────────────────────────┤
-│ Layer 3: Monitoring                                         │
-│   ├── sentinel.bicep ──────────────► log_analytics          │
-│   ├── vm_monitoring.bicep ─────────► vm, log_analytics      │
-│   └── network_monitoring.bicep ────► networking, storage,   │
-│                                      log_analytics          │
-├─────────────────────────────────────────────────────────────┤
-│ Layer 2: Compute                                            │
-│   └── vm.bicep ────────────────────► networking             │
-├─────────────────────────────────────────────────────────────┤
-│ Layer 1: Foundation (no dependencies - deploy in parallel)  │
-│   ├── networking.bicep                                      │
-│   ├── storage.bicep                                         │
-│   └── log_analytics.bicep                                   │
-└─────────────────────────────────────────────────────────────┘
+Layer 3: Monitoring
+  ├── sentinel.bicep ───────────────► log_analytics
+  ├── vm_monitoring.bicep ──────────► Windows VM + log_analytics
+  ├── linux_vm_monitoring.bicep ────► Linux VM + log_analytics
+  └── network_monitoring.bicep ─────► VNet + storage + log_analytics
+
+Layer 2: Compute
+  ├── vm.bicep ─────────────────────► networking
+  └── linux_vm.bicep ───────────────► networking
+
+Layer 1: Foundation
+  ├── networking.bicep
+  ├── storage.bicep
+  └── log_analytics.bicep
 ```
 
 ### Layer Rules
 
 | Layer | Can Depend On | Examples |
 |-------|---------------|----------|
-| 1 | Nothing | VNet, storage accounts, Log Analytics |
-| 2 | Layer 1 | VMs, App Services (need networking) |
-| 3 | Layers 1-2 | Monitoring, extensions (need compute + destinations) |
-| 4 | Layers 1-3 | Cost controls, alerting (need resources to monitor) |
+| 1 | Nothing | VNet, storage, Log Analytics |
+| 2 | Layer 1 | Windows/Linux VMs |
+| 3 | Layers 1-2 | AMA, DCRs, Sentinel, flow logs |
+| 4 | Layers 1-3 | Cost controls and alerting |
 
 ## Adding a New Module
 
@@ -104,7 +119,7 @@ If the deployment script or users need values from your module, add them to the 
 
 ## Subscription-Scope Resources
 
-Some resources must deploy at subscription scope (Activity logs, role assignments, NetworkWatcherRG resources). These go in `main_subscription.bicep` or are called separately from the PowerShell script.
+Some resources must deploy at subscription scope. Azure Activity diagnostic settings are deployed by `main_subscription.bicep`; VNet Flow Logs are orchestrated separately through `modules/network_monitoring.bicep`, which targets `NetworkWatcherRG`.
 
 Example: `network_monitoring.bicep` deploys to NetworkWatcherRG, so it's called as a separate subscription-level deployment in `adversary_lab_deploy.ps1`.
 
@@ -112,9 +127,10 @@ Example: `network_monitoring.bicep` deploys to NetworkWatcherRG, so it's called 
 
 Scripts in `/scripts` run on the deployed VM, not during infrastructure deployment.
 
-### Naming Convention
-- `Install-*.ps1` - Installs tools/configurations
-- `Uninstall-*.ps1` - Removes tools/configurations (should mirror Install)
+### Script Organization
+- `AdversaryLab-BlueTeam.ps1` owns Windows defensive tooling lifecycle with `-Action Install|Remove|Test`.
+- `AdversaryLab-RedTeam.ps1` owns offensive-tool lifecycle with the same action model.
+- `Install-SysmonLinux.sh` bootstraps Sysmon for Linux on the Ubuntu endpoint.
 
 ### Script Standards
 - Include comment-based help (`.SYNOPSIS`, `.DESCRIPTION`, `.PARAMETER`, `.EXAMPLE`)

@@ -1,73 +1,48 @@
 targetScope = 'resourceGroup'
 
-// ============================================================================
-// PARAMETERS
-// ============================================================================
-
 @description('Location for all resources')
 param location string = resourceGroup().location
-
-@description('Admin username for the VM')
+@description('Admin username for the VMs')
 param adminUsername string
-
-@description('Admin password for the VM')
+@description('Admin password for the VMs')
 @secure()
 param adminPassword string
-
 @description('Base name prefix for resources')
 param namePrefix string = 'adversarylab'
-
-@description('VM size')
+@description('Windows VM size')
 param vmSize string = 'Standard_D2s_v4'
-
-@description('Your Public IP address to allow RDP access')
+@description('Linux VM size')
+param linuxVmSize string = 'Standard_B2s'
+@description('Your Public IP address to allow RDP and SSH access')
 param myIP string = ''
-
 @description('Log Analytics workspace retention in days')
 param retentionInDays int = 30
-
 @description('Enable automatic shutdown schedule')
 param enableAutoShutdown bool = true
-
-@description('Time to shutdown the VM daily (24-hour format, e.g., 2330 for 11:30 PM)')
+@description('Time to shutdown the VMs daily')
 param shutdownTime string = '2330'
-
-@description('Timezone for the shutdown schedule')
+@description('Timezone for shutdown schedules')
 param shutdownTimeZone string = 'Eastern Standard Time'
-
-@description('Enable shutdown notifications')
+@description('Enable Windows VM shutdown notifications')
 param enableShutdownNotificationEmails bool = false
-
 @description('Email for shutdown notifications')
 param notificationEmail string = ''
-
 @description('Minutes before shutdown to send notification')
 param notificationMinutesBefore int = 15
-
-@description('Tags applied to every resource that supports them')
+@description('Tags applied to resources')
 param tags object = {
   Environment: 'Development'
   Project: namePrefix
   Purpose: 'AdversaryLab'
 }
-
-@description('Suffix that makes resource names unique inside the resource group. Defaults to a stable hash of the resource group id. Seeding it on deployment().name - as this template previously did - meant deploying under a different deployment name silently produced an entirely new set of resources instead of updating the existing ones. Override this to adopt resources from an earlier deployment.')
+@description('Stable resource-name suffix')
 @minLength(3)
 @maxLength(6)
 param resourceSuffix string = substring(uniqueString(resourceGroup().id), 0, 4)
-
-@description('Start date for the budget (defaults to first day of current month)')
+@description('Start date for the budget')
 param budgetStartDate string = format('{0}-{1:D2}-01', utcNow('yyyy'), int(utcNow('MM')))
 
-// ============================================================================
-// VARIABLES
-// ============================================================================
-
 var uniqueNamePrefix = '${namePrefix}${resourceSuffix}'
-
-// ============================================================================
-// LAYER 1: FOUNDATION (no inter-dependencies)
-// ============================================================================
 
 module networking 'modules/networking.bicep' = {
   name: 'networking-${resourceSuffix}'
@@ -98,12 +73,8 @@ module logAnalytics 'modules/log_analytics.bicep' = {
   }
 }
 
-// ============================================================================
-// LAYER 2: COMPUTE (depends on Layer 1)
-// ============================================================================
-
 module vm 'modules/vm.bicep' = {
-  name: 'vm-${resourceSuffix}'
+  name: 'windows-vm-${resourceSuffix}'
   params: {
     location: location
     namePrefix: uniqueNamePrefix
@@ -122,9 +93,22 @@ module vm 'modules/vm.bicep' = {
   }
 }
 
-// ============================================================================
-// LAYER 3: MONITORING (depends on Layer 1 + Layer 2)
-// ============================================================================
+module linuxVm 'modules/linux_vm.bicep' = {
+  name: 'linux-vm-${resourceSuffix}'
+  params: {
+    location: location
+    namePrefix: uniqueNamePrefix
+    adminUsername: adminUsername
+    adminPassword: adminPassword
+    vmSize: linuxVmSize
+    subnetId: networking.outputs.subnetId
+    publicIpId: networking.outputs.linuxPublicIpId
+    enableAutoShutdown: enableAutoShutdown
+    shutdownTime: shutdownTime
+    shutdownTimeZone: shutdownTimeZone
+    tags: tags
+  }
+}
 
 module sentinel 'modules/sentinel.bicep' = {
   name: 'sentinel-${resourceSuffix}'
@@ -134,7 +118,7 @@ module sentinel 'modules/sentinel.bicep' = {
 }
 
 module vmMonitoring 'modules/vm_monitoring.bicep' = {
-  name: 'vm-monitoring-${resourceSuffix}'
+  name: 'windows-monitoring-${resourceSuffix}'
   params: {
     location: location
     namePrefix: uniqueNamePrefix
@@ -144,12 +128,16 @@ module vmMonitoring 'modules/vm_monitoring.bicep' = {
   }
 }
 
-// Note: Network monitoring is deployed separately via PowerShell as it requires subscription scope
-// to deploy into NetworkWatcherRG. See adversary_lab_deploy.ps1
-
-// ============================================================================
-// LAYER 4: COST MANAGEMENT
-// ============================================================================
+module linuxVmMonitoring 'modules/linux_vm_monitoring.bicep' = {
+  name: 'linux-monitoring-${resourceSuffix}'
+  params: {
+    location: location
+    namePrefix: uniqueNamePrefix
+    vmResourceId: linuxVm.outputs.vmResourceId
+    workspaceResourceId: logAnalytics.outputs.workspaceResourceId
+    tags: tags
+  }
+}
 
 resource budgetAlert 'Microsoft.Consumption/budgets@2023-05-01' = if (!empty(notificationEmail)) {
   name: '${uniqueNamePrefix}-dev-budget'
@@ -174,39 +162,25 @@ resource budgetAlert 'Microsoft.Consumption/budgets@2023-05-01' = if (!empty(not
   }
 }
 
-// ============================================================================
-// OUTPUTS
-// ============================================================================
-
-// Infrastructure
 output vmName string = vm.outputs.vmName
 output vmPublicIP string = networking.outputs.publicIpAddress
 output vmResourceId string = vm.outputs.vmResourceId
+output linuxVmName string = linuxVm.outputs.vmName
+output linuxVmPublicIP string = networking.outputs.linuxPublicIpAddress
+output linuxVmResourceId string = linuxVm.outputs.vmResourceId
 output uniqueNamePrefix string = uniqueNamePrefix
-
-// Networking
 output vnetId string = networking.outputs.vnetId
 output vnetResourceId string = networking.outputs.vnetResourceId
 output vnetName string = networking.outputs.vnetName
-
-// Monitoring
 output workspaceName string = logAnalytics.outputs.workspaceName
-output workspaceId string = logAnalytics.outputs.workspaceId
+output workspaceCustomerId string = logAnalytics.outputs.workspaceCustomerId
 output workspaceResourceId string = logAnalytics.outputs.workspaceResourceId
 output dcrId string = vmMonitoring.outputs.dcrId
-
-// Note: flowLogId is output from the subscription-level deployment
-
-// Storage
+output linuxDcrId string = linuxVmMonitoring.outputs.dcrId
 output storageAccountName string = storage.outputs.storageAccountName
 output storageAccountResourceId string = storage.outputs.storageAccountResourceId
-
-// Resource Group Info
 output resourceGroupName string = resourceGroup().name
-
-// Helpful URLs
 output sentinelUrl string = 'https://portal.azure.com/#@${subscription().tenantId}/resource${logAnalytics.outputs.workspaceResourceId}/overview'
 output vmConnectCommand string = 'mstsc /v:${networking.outputs.publicIpAddress}'
-
-// Cost Management
+output linuxConnectCommand string = 'ssh ${adminUsername}@${networking.outputs.linuxPublicIpAddress}'
 output budgetCreated bool = !empty(notificationEmail)

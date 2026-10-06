@@ -568,29 +568,28 @@ function Install-SysmonComponent {
     Start-Sleep -Seconds 3
 
     $after = Test-SysmonComponent
+    $needsReboot = -not $after.Present
+
+    Set-ComponentState -Name 'Sysmon' -Data @{
+        InstalledAt  = (Get-Date).ToString('o')
+        PreExisting  = $preExisting
+        BinaryPath   = $SysmonPrimaryPath
+        ConfigUrl    = if ($UseDefaultSysmonConfig) { 'built-in' } else { $SysmonConfigUrl }
+        PendingReboot = $needsReboot
+    }
+
     if ($after.Present) {
         Write-Status "Sysmon is running ($($after.Detail))" -Type Success
         Write-Status "Events: $SysmonChannel" -Type Info
-    }
-    else {
-        # Sysmon registers its event manifest at install time. Uninstalling and
-        # reinstalling within the same boot leaves the manifest half-removed and
-        # wevtutil fails, so the service never comes up. A reboot clears it.
-        Write-Status 'Sysmon did not start' -Type Warning
-        if ($before.Present -or (Test-Path $SysmonPrimaryPath)) {
-            Write-Status 'This usually means Sysmon was uninstalled earlier in this boot session' -Type Warning
-            Write-Status 'Reboot, then re-run: -Action Install -Component Sysmon' -Type Warning
-        }
+        Restart-MonitorAgent
+        return
     }
 
-    Set-ComponentState -Name 'Sysmon' -Data @{
-        InstalledAt = (Get-Date).ToString('o')
-        PreExisting = $preExisting
-        BinaryPath  = $SysmonPrimaryPath
-        ConfigUrl   = if ($UseDefaultSysmonConfig) { 'built-in' } else { $SysmonConfigUrl }
-    }
-
-    Restart-MonitorAgent
+    # Sysmon registers its event manifest at install time. A partially registered
+    # service/channel can require one reboot before the install can finish.
+    Write-Status 'Sysmon did not start' -Type Warning
+    Write-Status 'Reboot, then re-run: -Action Install -Component Sysmon' -Type Warning
+    throw 'Sysmon installation is incomplete and requires a reboot before retrying.'
 }
 
 function Clear-PendingFileRename {
@@ -1251,7 +1250,23 @@ try {
         Show-Plan -Names $selected
     }
 
-    # -WhatIf and -Force both imply no interactive confirmation.
+    # -WhatIf, -Yes and -Force imply no interactive confirmation.
+    # Azure Run Command / Custom Script Extension cannot answer Read-Host, so
+    # fail fast rather than leaving the extension busy until timeout.
+    $canPrompt = [Environment]::UserInteractive
+    try {
+        if ([Console]::IsInputRedirected) { $canPrompt = $false }
+    }
+    catch {
+        # Older hosts may not expose IsInputRedirected. UserInteractive remains
+        # the fallback signal.
+        Write-Verbose "Could not inspect Console.IsInputRedirected: $($_.Exception.Message)"
+    }
+
+    if (-not $Force -and -not $Yes -and -not $WhatIfPreference -and -not $canPrompt) {
+        throw 'Non-interactive execution detected. Re-run with -Yes or -Force.'
+    }
+
     if (-not $Force -and -not $Yes -and -not $WhatIfPreference) {
         foreach ($row in (Get-ComponentReport -Names $selected)) {
             $state = if ($row.Present) { 'configured' } else { 'not configured' }

@@ -31,5 +31,5 @@ resource workspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
 }
 
 output workspaceName string = workspace.name
-output workspaceId string = workspace.properties.customerId
+output workspaceCustomerId string = workspace.properties.customerId
 output workspaceResourceId string = workspace.id
