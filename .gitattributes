@@ -1,0 +1,25 @@
+# Use LF for code files (works better across platforms)
+*.bicep text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Use CRLF for Windows scripts
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Force all text files to normalize line endings
+* text=auto
+
+# Binary files - don't modify line endings
+#*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.exe binary
+*.pfx binary
+*.cer binary
