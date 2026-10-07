@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.1] - 2026-10-07
+
+### Added
+- **Linux audit telemetry bootstrap** - `scripts/Install-SysmonLinux.sh` now installs `auditd` and `audispd-plugins` on the Ubuntu endpoint so Linux audit events are available alongside Sysmon telemetry.
+- **Linux telemetry validation script** - `scripts/Test-LinuxTelemetry.sh` validates that `auditd` and Sysmon for Linux are active and can generate observable local telemetry.
+
+### Changed
+- **Deterministic Sysmon for Linux configuration** - the Linux bootstrap now writes and applies an AdversaryLab Sysmon configuration instead of relying on package/default behavior.
+
+### Fixed
+- **Missing Linux audit telemetry** - fresh Ubuntu deployments previously provided Sysmon telemetry but did not install the Linux audit stack, leaving `auditd`/`auditctl`-based telemetry unavailable.
+- **Sysmon bootstrap validation** - the installer now fails when required telemetry services are not active instead of masking service startup failures.
+
 ### Added
 - **Components declare their prerequisites** - `Requires` entries in the component table let `-Action Test` and `-WhatIf` report `skip (needs choco (from Chocolatey))` instead of a bare `absent`. The check probes the capability (is git on PATH?) rather than the providing component's completeness, so a git or Python installed by other means is not reported as blocked. Reporting only: the checks inside each Install remain the real gate.
 - **`-Yes` switch** - skips the confirmation prompt without changing any other behaviour. `-Force` also skips it but additionally reinstalls present components and removes ones that pre-dated the script, so unattended runs previously had no way to opt out of the destructive semantics.
